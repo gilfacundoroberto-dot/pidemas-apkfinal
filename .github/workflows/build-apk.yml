@@ -1,0 +1,146 @@
+
+name: Generar APK Pidemás
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Preparar archivos web
+        run: |
+          mkdir -p www
+          cp index.html manifest.webmanifest sw.js *.png www/
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Preparar autenticación Google
+        run: npx esbuild native-auth.js --bundle --format=iife --outfile=www/native-auth.js
+
+      - name: Crear proyecto Android
+        run: npx cap add android
+
+      - name: Generar iconos Android
+        run: |
+          python3 -m pip install --quiet pillow
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+
+          res = Path("android/app/src/main/res")
+          src = Image.open("icon-512.png").convert("RGBA")
+
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192
+          }
+
+          for folder, size in sizes.items():
+              d = res / folder
+              d.mkdir(parents=True, exist_ok=True)
+              icon = src.resize((size, size), Image.Resampling.LANCZOS)
+              icon.save(d / "ic_launcher.png")
+              icon.save(d / "ic_launcher_round.png")
+
+          drawable = res / "drawable"
+          drawable.mkdir(parents=True, exist_ok=True)
+          src.resize((432, 432), Image.Resampling.LANCZOS).save(
+              drawable / "pidemas_icon_foreground.png"
+          )
+
+          adaptive = res / "mipmap-anydpi-v26"
+          adaptive.mkdir(parents=True, exist_ok=True)
+
+          xml = '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/pidemas_icon_background"/><foreground android:drawable="@drawable/pidemas_icon_foreground"/></adaptive-icon>'
+
+          for name in ["ic_launcher.xml", "ic_launcher_round.xml"]:
+              (adaptive / name).write_text(xml)
+
+          values = res / "values"
+          values.mkdir(parents=True, exist_ok=True)
+          (values / "pidemas_icon_background.xml").write_text(
+              '<resources><color name="pidemas_icon_background">#FF5A24</color></resources>'
+          )
+          PY
+
+      - name: Configurar icono y Google
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+
+          m = re.search(r'<application\b[^>]*>', s)
+          if not m:
+              raise SystemExit("No se encontró application")
+
+          tag = m.group(0)
+          tag = re.sub(r'\sandroid:icon="[^"]*"', '', tag)
+          tag = re.sub(r'\sandroid:roundIcon="[^"]*"', '', tag)
+          tag = tag[:-1] + ' android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">'
+          s = s[:m.start()] + tag + s[m.end():]
+
+          if 'android:scheme="com.pidemas.delivery"' not in s:
+              a = re.search(r'<activity\b[^>]*android:name="[^"]*MainActivity"[^>]*>', s)
+              if not a:
+                  raise SystemExit("No se encontró MainActivity")
+
+              atag = a.group(0)
+              if 'android:launchMode=' not in atag:
+                  atag = atag[:-1] + ' android:launchMode="singleTask">'
+                  s = s[:a.start()] + atag + s[a.end():]
+                  a = re.search(r'<activity\b[^>]*android:name="[^"]*MainActivity"[^>]*>', s)
+
+              intent = '<intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="com.pidemas.delivery" android:host="auth" android:path="/callback"/></intent-filter>'
+
+              pos = s.find("</activity>", a.start())
+              if pos < 0:
+                  raise SystemExit("No se encontró cierre de MainActivity")
+
+              s = s[:pos] + intent + s[pos:]
+
+          p.write_text(s)
+          PY
+
+      - name: Sincronizar Capacitor
+        run: npx cap sync android
+
+      - name: Compilar APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pidemas-Tienda-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
