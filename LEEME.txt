@@ -1,0 +1,16 @@
+PIDEMÁS TIENDA — PROYECTO PARA GENERAR APK EN GITHUB
+
+Este paquete está preparado desde el ZIP PWA recibido.
+
+Sube el contenido extraído a la raíz del repositorio GitHub:
+- Reemplaza los archivos web por los de este paquete.
+- Añade package.json, capacitor.config.json y native-auth.js.
+- Reemplaza .github/workflows/build-apk.yml con el incluido.
+- No subas el ZIP como un único archivo.
+
+El workflow genera una APK Android con Capacitor y configura el icono nativo desde icon-512.png.
+También incorpora el retorno de OAuth de Google mediante:
+com.pidemas.delivery://auth/callback
+
+En Supabase Authentication > URL Configuration > Redirect URLs debe estar permitido ese callback.
+En Google Cloud, conserva como Authorized redirect URI la URL HTTPS callback de Supabase.
